@@ -138,8 +138,14 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm); padding: 20px;
   }
-  .card-title { font-size: 14px; font-weight: 700; margin: 0 0 4px; }
+  .card-title { font-size: 14px; font-weight: 700; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
   .card-sub { font-size: 12px; color: var(--ink-muted); margin: 0 0 14px; }
+  .title-icon {
+    width: 24px; height: 24px; border-radius: 7px; display: inline-flex; align-items: center;
+    justify-content: center; flex-shrink: 0; background: var(--surface-sunken); color: var(--ink-secondary);
+  }
+  .title-icon svg { width: 13px; height: 13px; }
+  .title-icon.gold { background: var(--gold-100); color: var(--gold-700); }
 
   .grid { display: grid; gap: 16px; }
   .grid-4 { grid-template-columns: repeat(4, 1fr); }
@@ -392,6 +398,23 @@ function pct(n){ return Math.round((Number(n)||0) * 100) + '%'; }
 function fmtDate(d){ if(!d) return '—'; const dt = new Date(d); return dt.toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'}); }
 function fmtDateTime(d){ if(!d) return '—'; const dt = new Date(d); return dt.toLocaleDateString('en-IN', {day:'numeric', month:'short'}) + ', ' + dt.toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'}); }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
+// Resolves to {lat:null,lng:null} rather than rejecting on denial/timeout/no-support, so
+// check-in/out never gets blocked by a missing or refused location permission.
+function getLocation(){
+  return new Promise((resolve) => {
+    if (!navigator.geolocation){ resolve({ lat: null, lng: null }); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve({ lat: null, lng: null }),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  });
+}
+function mapLink(lat, lng){
+  return lat != null && lng != null
+    ? `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank" rel="noopener" style="color:var(--gold-600);font-weight:700">View map</a>`
+    : '<span class="hint" style="margin:0">no location</span>';
+}
 function initials(name){ return (name||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
 function statusLabel(s){ return (s||'').replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()); }
 function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -732,7 +755,7 @@ async function renderDashboard(){
   </div>
   <div class="grid grid-2" style="margin-top:16px">
     <div class="card">
-      <div class="card-title">${icon('trophy')} Leaderboard — this month</div>
+      <div class="card-title"><span class="title-icon gold">${icon('trophy')}</span> Leaderboard — this month</div>
       <div class="card-sub">Ranked by closed deal value</div>
       ${renderHBars(lbBars)}
     </div>
@@ -969,8 +992,11 @@ async function renderActivity(){
         <div class="card-title">Check-in / Check-out</div>
         <div class="card-sub">${fmtDate(todayISO())}</div>
         <div class="kv"><span class="k">Checked in</span><span class="v">${today.check_in_time ? fmtDateTime(today.check_in_time) : '—'}</span></div>
+        ${today.check_in_time ? `<div class="kv"><span class="k">Check-in location</span><span class="v">${mapLink(today.check_in_lat, today.check_in_lng)}</span></div>` : ''}
         <div class="kv"><span class="k">Checked out</span><span class="v">${today.check_out_time ? fmtDateTime(today.check_out_time) : '—'}</span></div>
-        <div style="display:flex;gap:10px;margin-top:14px">
+        ${today.check_out_time ? `<div class="kv"><span class="k">Check-out location</span><span class="v">${mapLink(today.check_out_lat, today.check_out_lng)}</span></div>` : ''}
+        <p class="hint" style="margin-top:10px">Your location is captured when you check in/out and is visible to your admin.</p>
+        <div style="display:flex;gap:10px;margin-top:10px">
           <button class="btn btn-secondary btn-block" id="checkInBtn" ${today.check_in_time ? 'disabled' : ''}>${icon('clock')} Check in</button>
           <button class="btn btn-secondary btn-block" id="checkOutBtn" ${!today.check_in_time || today.check_out_time ? 'disabled' : ''}>${icon('clock')} Check out</button>
         </div>
@@ -995,7 +1021,7 @@ async function renderActivity(){
       <div class="card-title" style="padding:8px 8px 0">History</div>
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Calls</th><th>Visits</th><th>Meetings</th><th>New Leads</th><th>In</th><th>Out</th></tr></thead>
-        <tbody>${history.map(a => `<tr><td>${fmtDate(a.activity_date)}</td><td class="num">${a.calls_made}</td><td class="num">${a.site_visits}</td><td class="num">${a.meetings}</td><td class="num">${a.new_leads}</td><td>${a.check_in_time ? fmtDateTime(a.check_in_time).split(', ')[1] : '—'}</td><td>${a.check_out_time ? fmtDateTime(a.check_out_time).split(', ')[1] : '—'}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="7">No activity logged yet.</td></tr>'}</tbody>
+        <tbody>${history.map(a => `<tr><td>${fmtDate(a.activity_date)}</td><td class="num">${a.calls_made}</td><td class="num">${a.site_visits}</td><td class="num">${a.meetings}</td><td class="num">${a.new_leads}</td><td>${a.check_in_time ? fmtDateTime(a.check_in_time).split(', ')[1] + ' · ' + mapLink(a.check_in_lat, a.check_in_lng) : '—'}</td><td>${a.check_out_time ? fmtDateTime(a.check_out_time).split(', ')[1] + ' · ' + mapLink(a.check_out_lat, a.check_out_lng) : '—'}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="7">No activity logged yet.</td></tr>'}</tbody>
       </table></div>
     </div>`;
   }
@@ -1009,16 +1035,26 @@ async function renderActivity(){
   </div>
   <div class="card table-card">
     <div class="table-wrap"><table>
-      <thead><tr><th>Employee</th><th>Date</th><th>Calls</th><th>Visits</th><th>Meetings</th><th>New Leads</th></tr></thead>
-      <tbody>${filtered.slice(0, 60).map(a => `<tr><td>${escapeHtml(empName(a.employee_id))}</td><td>${fmtDate(a.activity_date)}</td><td class="num">${a.calls_made}</td><td class="num">${a.site_visits}</td><td class="num">${a.meetings}</td><td class="num">${a.new_leads}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="6">No activity logged yet.</td></tr>'}</tbody>
+      <thead><tr><th>Employee</th><th>Date</th><th>Calls</th><th>Visits</th><th>Meetings</th><th>New Leads</th><th>Check In</th><th>Check Out</th></tr></thead>
+      <tbody>${filtered.slice(0, 60).map(a => `<tr><td>${escapeHtml(empName(a.employee_id))}</td><td>${fmtDate(a.activity_date)}</td><td class="num">${a.calls_made}</td><td class="num">${a.site_visits}</td><td class="num">${a.meetings}</td><td class="num">${a.new_leads}</td><td>${a.check_in_time ? fmtDateTime(a.check_in_time).split(', ')[1] + ' · ' + mapLink(a.check_in_lat, a.check_in_lng) : '—'}</td><td>${a.check_out_time ? fmtDateTime(a.check_out_time).split(', ')[1] + ' · ' + mapLink(a.check_out_lat, a.check_out_lng) : '—'}</td></tr>`).join('') || '<tr class="empty-row"><td colspan="8">No activity logged yet.</td></tr>'}</tbody>
     </table></div>
   </div>`;
 }
 
 function bindActivity(){
   if (isEmployee()){
-    document.getElementById('checkInBtn').onclick = async () => { await rpc('check_in', { p_employee_id: session.employee.id, p_password: session.password }); toast('Checked in', 'success'); renderRoute(); };
-    document.getElementById('checkOutBtn').onclick = async () => { await rpc('check_out', { p_employee_id: session.employee.id, p_password: session.password }); toast('Checked out', 'success'); renderRoute(); };
+    document.getElementById('checkInBtn').onclick = async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      const { lat, lng } = await getLocation();
+      await rpc('check_in', { p_employee_id: session.employee.id, p_password: session.password, p_lat: lat, p_lng: lng });
+      toast('Checked in', 'success'); renderRoute();
+    };
+    document.getElementById('checkOutBtn').onclick = async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      const { lat, lng } = await getLocation();
+      await rpc('check_out', { p_employee_id: session.employee.id, p_password: session.password, p_lat: lat, p_lng: lng });
+      toast('Checked out', 'success'); renderRoute();
+    };
     document.getElementById('activityForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -1076,7 +1112,7 @@ async function renderDayOffs(){
       <div class="card table-card" style="margin-top:${requestForm ? '16px' : '0'}">${rows}</div>
     </div>
     <div class="card">
-      <div class="card-title">${icon('dayoff')} Who's out (upcoming)</div>
+      <div class="card-title"><span class="title-icon">${icon('dayoff')}</span> Who's out (upcoming)</div>
       <div class="card-sub">Team calendar</div>
       ${calRows}
     </div>
@@ -1104,7 +1140,7 @@ async function renderTeam(){
   if (isEmployee()){
     const lb = await fetchLeaderboard();
     return `
-    <div class="section-head"><h2>Team Leaderboard</h2><span class="sub-text">This month, ranked by closed value</span></div>
+    <div class="section-head"><h2 style="display:inline-flex;align-items:center;gap:8px"><span class="title-icon gold">${icon('trophy')}</span> Team Leaderboard</h2><span class="sub-text">This month, ranked by closed value</span></div>
     <div class="card table-card">
       <div class="table-wrap"><table>
         <thead><tr><th>Rank</th><th>Name</th><th>Deals Closed</th><th>Value Closed</th></tr></thead>

@@ -89,6 +89,10 @@ trusting the client's "I'm logged in" state), so calling the API directly bypass
   hardcoded.
 - **Day-off calendar**: any approved time off shows up on a shared "who's out" list visible
   to the whole team (name + dates only, not the reason) so people can plan around it.
+- **GPS-tagged check-in/check-out**: captures the employee's location (via the browser's
+  Geolocation API) the moment they check in or out, with a "View map" link for both the
+  employee and admin. If location access is denied or unavailable, check-in/out still
+  succeeds — it just won't have a location attached.
 - Palette: deep navy/charcoal sidebar with a warm brass-gold accent — avoids the "generic AI
   dark UI" look, reserves gold for prize/target/leaderboard moments the same way a physical
   awards wall would. Real inline SVG icons (no emoji), soft elevation shadows, and

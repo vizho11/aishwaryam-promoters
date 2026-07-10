@@ -124,7 +124,9 @@ create table if not exists follow_ups (
 );
 create index if not exists follow_ups_employee_idx on follow_ups(employee_id);
 
--- One row per employee per day.
+-- One row per employee per day. check_in/out lat/lng are captured from the browser's
+-- Geolocation API at the moment of check-in/out (nullable — a denied/unavailable GPS
+-- permission still lets check-in/out succeed, just without coordinates).
 create table if not exists daily_activity (
   id uuid primary key default gen_random_uuid(),
   employee_id uuid not null references employees(id) on delete cascade,
@@ -134,10 +136,18 @@ create table if not exists daily_activity (
   meetings int not null default 0,
   new_leads int not null default 0,
   check_in_time timestamptz,
+  check_in_lat numeric,
+  check_in_lng numeric,
   check_out_time timestamptz,
+  check_out_lat numeric,
+  check_out_lng numeric,
   notes text default '',
   unique(employee_id, activity_date)
 );
+alter table daily_activity add column if not exists check_in_lat numeric;
+alter table daily_activity add column if not exists check_in_lng numeric;
+alter table daily_activity add column if not exists check_out_lat numeric;
+alter table daily_activity add column if not exists check_out_lng numeric;
 
 create table if not exists day_offs (
   id uuid primary key default gen_random_uuid(),
@@ -645,27 +655,35 @@ begin
 end;
 $$;
 
-create or replace function check_in(p_employee_id uuid, p_password text)
+-- Adding p_lat/p_lng changes the signature (2 args -> 4), so drop the old ones first —
+-- same reasoning as add_lead/admin_update_employee above.
+drop function if exists check_in(uuid, text);
+drop function if exists check_out(uuid, text);
+
+create or replace function check_in(p_employee_id uuid, p_password text, p_lat numeric, p_lng numeric)
 returns boolean
 language plpgsql security definer as $$
 begin
   if not verify_employee_credentials(p_employee_id, p_password) then return false; end if;
-  insert into daily_activity (employee_id, activity_date, check_in_time)
-    values (p_employee_id, current_date, now())
+  insert into daily_activity (employee_id, activity_date, check_in_time, check_in_lat, check_in_lng)
+    values (p_employee_id, current_date, now(), p_lat, p_lng)
   on conflict (employee_id, activity_date) do update set
-    check_in_time = coalesce(daily_activity.check_in_time, now());
+    check_in_time = coalesce(daily_activity.check_in_time, now()),
+    check_in_lat = coalesce(daily_activity.check_in_lat, p_lat),
+    check_in_lng = coalesce(daily_activity.check_in_lng, p_lng);
   return true;
 end;
 $$;
 
-create or replace function check_out(p_employee_id uuid, p_password text)
+create or replace function check_out(p_employee_id uuid, p_password text, p_lat numeric, p_lng numeric)
 returns boolean
 language plpgsql security definer as $$
 begin
   if not verify_employee_credentials(p_employee_id, p_password) then return false; end if;
-  insert into daily_activity (employee_id, activity_date, check_out_time)
-    values (p_employee_id, current_date, now())
-  on conflict (employee_id, activity_date) do update set check_out_time = now();
+  insert into daily_activity (employee_id, activity_date, check_out_time, check_out_lat, check_out_lng)
+    values (p_employee_id, current_date, now(), p_lat, p_lng)
+  on conflict (employee_id, activity_date) do update set
+    check_out_time = now(), check_out_lat = p_lat, check_out_lng = p_lng;
   return true;
 end;
 $$;
