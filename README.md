@@ -1,10 +1,10 @@
 # aishwaryam-promoters
 
-Real estate team console — employee logins, daily activity, follow-ups, lead pipeline &
-conversion rate, targets/commission/leaderboard, property listings, and day-off requests.
+Land promoter team console — employee logins, daily activity, follow-ups, lead pipeline &
+conversion rate, targets/commission/leaderboard, land plot inventory, and day-off requests.
 
 `index.html` is the whole app — no build step, no bundler. All data (employees, leads,
-follow-ups, daily activity, day-offs, properties) lives in a real **Supabase** (Postgres)
+follow-ups, daily activity, day-offs, plots) lives in a real **Supabase** (Postgres)
 backend, so it syncs across every device.
 
 Run it locally:
@@ -51,7 +51,7 @@ Fonts (Archivo, Manrope, JetBrains Mono) are bundled in `fonts.css`, also with n
 
 ## Security model
 
-Every table (`employees`, `leads`, `follow_ups`, `daily_activity`, `day_offs`, `properties`,
+Every table (`employees`, `leads`, `follow_ups`, `daily_activity`, `day_offs`, `plots`,
 plus the internal `admin_config`/`auth_attempts`) has row-level security enabled with **zero**
 policies — there is no direct anon read or write of any kind, even with the anon key. The
 only way in or out is through `SECURITY DEFINER` functions in `supabase/setup.sql`, each of
@@ -69,6 +69,17 @@ trusting the client's "I'm logged in" state), so calling the API directly bypass
 
 ## Notes
 
+- **Plots**: each row is a land parcel, optionally grouped under a `layout_name` +
+  `plot_number` (for numbered plots within a developed layout/venture) — leave both blank for
+  a standalone parcel. Tracks extent (value + sqft/cents/acres), facing direction, corner-plot
+  flag, and approach road width, since those commonly affect land pricing. Status is
+  available/booked/sold (no "rented" — land is sold, not leased out).
+- If you already ran an earlier version of `supabase/setup.sql` that created a generic
+  `properties` table, just re-run the current `supabase/setup.sql` — it detects the old table
+  and migrates automatically (drops the old property-specific functions, renames
+  `leads.property_id` to `leads.plot_id`, and replaces `properties` with `plots`). Any test
+  rows you'd already added to the old `properties` table won't carry over, since the fields
+  don't map cleanly — only a concern if you'd added real property data there already.
 - **Conversion rate** = closed-won leads ÷ total leads (all-time), shown per employee and
   company-wide.
 - **Leaderboard, targets & commission**: admin sets a monthly ₹ target and commission % per

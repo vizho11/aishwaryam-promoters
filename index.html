@@ -177,7 +177,7 @@
   .pill-missed { background: var(--critical-bg); color: var(--critical); }
   .pill-available { background: var(--good-bg); color: var(--good); }
   .pill-sold { background: #eef1fb; color: #4a3aa7; }
-  .pill-rented { background: #e8f0fc; color: #2a5b9c; }
+  .pill-booked { background: var(--warning-bg); color: var(--warning); }
   .pill-active { background: var(--good-bg); color: var(--good); }
   .pill-inactive { background: var(--surface-sunken); color: var(--ink-muted); }
 
@@ -332,7 +332,7 @@ const ICONS = {
   followup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
   activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>',
   team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6.2 6.5-6.2s6.5 2.6 6.5 6.2"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M15.8 13.9c2.9.3 5.2 2.6 5.2 6.1"/></svg>',
-  property: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><rect x="10" y="14" width="4" height="7"/></svg>',
+  plot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-5 9 5-9 5-9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>',
   dayoff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -552,7 +552,7 @@ const EMPLOYEE_NAV = [
   ['activity','activity','Daily Activity'],
   ['dayoffs','dayoff','Day Off'],
   ['team','team','Team'],
-  ['properties','property','Properties'],
+  ['plots','plot','Plots'],
 ];
 const ADMIN_NAV = [
   ['dashboard','dashboard','Dashboard'],
@@ -560,7 +560,7 @@ const ADMIN_NAV = [
   ['followups','followup','Follow-ups'],
   ['activity','activity','Activity'],
   ['team','team','Employees'],
-  ['properties','property','Properties'],
+  ['plots','plot','Plots'],
   ['dayoffs','dayoff','Day Offs'],
 ];
 
@@ -647,7 +647,7 @@ async function fetchMyOrAllDayOffs(){ return await rpc('list_day_offs', authTrip
 // a literal NULL and silently zero out every employee's numbers.
 async function fetchLeaderboard(){ return await rpc('get_leaderboard', authTriple()); }
 async function fetchEmployeesPublic(){ return await rpc('list_employees_public', authTriple()); }
-async function fetchProperties(){ return await rpc('list_properties', authTriple()); }
+async function fetchPlots(){ return await rpc('list_plots', authTriple()); }
 
 function dueBucket(followUp){
   if (followUp.status !== 'pending') return followUp.status;
@@ -770,12 +770,12 @@ function closeModal(){ const el = document.getElementById('modalRoot'); if (el) 
 // ============================================================
 // Screen state (cached data used by modals opened from a screen)
 // ============================================================
-let leadsData = { leads: [], properties: [], employees: [] };
+let leadsData = { leads: [], plots: [], employees: [] };
 let followUpsData = { followUps: [], leads: [] };
 let activityData = { activity: [], employees: [] };
 let dayOffsData = { dayOffs: [] };
 let teamData = { employees: [] };
-let propertiesData = { properties: [] };
+let plotsData = { plots: [] };
 let fuFilter = 'all';
 let activityFilterEmp = '';
 
@@ -783,10 +783,10 @@ let activityFilterEmp = '';
 // Leads (kanban pipeline)
 // ============================================================
 async function renderLeads(){
-  const [leads, properties, employees] = await Promise.all([
-    fetchMyOrAllLeads(), fetchProperties(), isAdmin() ? fetchEmployeesPublic() : Promise.resolve([])
+  const [leads, plots, employees] = await Promise.all([
+    fetchMyOrAllLeads(), fetchPlots(), isAdmin() ? fetchEmployeesPublic() : Promise.resolve([])
   ]);
-  leadsData = { leads, properties, employees };
+  leadsData = { leads, plots, employees };
   const cols = LEAD_STAGES.map(stage => {
     const items = leads.filter(l => l.status === stage);
     return `<div class="kanban-col">
@@ -812,7 +812,7 @@ function bindLeads(){
 }
 
 function openAddLeadModal(){
-  const { properties, employees } = leadsData;
+  const { plots, employees } = leadsData;
   openModal(`
     <div class="modal-panel">
       <div class="modal-head"><h3>Add Lead</h3><button class="modal-close">${icon('close')}</button></div>
@@ -823,8 +823,8 @@ function openAddLeadModal(){
           <label class="field"><span class="lbl">Source</span><input type="text" name="source" placeholder="Referral, Ad, Walk-in…"></label>
         </div>
         <div class="form-row">
-          <label class="field"><span class="lbl">Property of interest</span>
-            <select name="property_id"><option value="">— None —</option>${properties.map(p => `<option value="${p.id}">${escapeHtml(p.title)}</option>`).join('')}</select>
+          <label class="field"><span class="lbl">Plot of interest</span>
+            <select name="plot_id"><option value="">— None —</option>${plots.map(p => `<option value="${p.id}">${escapeHtml(plotLabel(p))}</option>`).join('')}</select>
           </label>
           <label class="field"><span class="lbl">Budget (₹)</span><input type="number" name="budget" min="0"></label>
         </div>
@@ -841,7 +841,7 @@ function openAddLeadModal(){
     const fd = new FormData(e.target);
     const res = await rpc('add_lead', {
       ...authTriple(), p_name: fd.get('name'), p_phone: fd.get('phone'), p_source: fd.get('source') || '',
-      p_property_id: fd.get('property_id') || null, p_budget: fd.get('budget') ? Number(fd.get('budget')) : 0,
+      p_plot_id: fd.get('plot_id') || null, p_budget: fd.get('budget') ? Number(fd.get('budget')) : 0,
       p_notes: fd.get('notes') || '', p_assigned_to: fd.get('assigned_to') || null
     });
     if (res.success) { toast('Lead added', 'success'); closeModal(); renderRoute(); }
@@ -852,14 +852,14 @@ function openAddLeadModal(){
 function openLeadDetailModal(id){
   const lead = leadsData.leads.find(l => l.id === id);
   if (!lead) return;
-  const { employees, properties } = leadsData;
-  const property = properties.find(p => p.id === lead.property_id);
+  const { employees, plots } = leadsData;
+  const plot = plots.find(p => p.id === lead.plot_id);
   openModal(`
     <div class="modal-panel wide">
       <div class="modal-head"><h3>${escapeHtml(lead.name)}</h3><button class="modal-close">${icon('close')}</button></div>
       <div class="kv"><span class="k">Phone</span><span class="v">${escapeHtml(lead.phone)}</span></div>
       <div class="kv"><span class="k">Source</span><span class="v">${escapeHtml(lead.source || '—')}</span></div>
-      <div class="kv"><span class="k">Property</span><span class="v">${property ? escapeHtml(property.title) : '—'}</span></div>
+      <div class="kv"><span class="k">Plot</span><span class="v">${plot ? escapeHtml(plotLabel(plot)) : '—'}</span></div>
       <div class="divider"></div>
       <form id="leadUpdateForm">
         <div class="form-row">
@@ -1203,80 +1203,123 @@ function openResetPasswordModal(empId){
 }
 
 // ============================================================
-// Properties
+// Plots (land inventory)
 // ============================================================
-async function renderProperties(){
-  const properties = await fetchProperties();
-  propertiesData.properties = properties;
+const PLOT_TYPES = ['residential', 'commercial', 'agricultural'];
+const PLOT_STATUSES = ['available', 'booked', 'sold'];
+const FACINGS = ['', 'North', 'South', 'East', 'West', 'North-East', 'North-West', 'South-East', 'South-West'];
+
+function plotLabel(p){
+  const bits = [];
+  if (p.layout_name) bits.push(p.layout_name);
+  if (p.plot_number) bits.push('Plot ' + p.plot_number);
+  return bits.length ? bits.join(' — ') + (p.title ? ' (' + p.title + ')' : '') : p.title;
+}
+function plotExtent(p){ return p.extent_value ? `${p.extent_value} ${p.extent_unit}` : '—'; }
+function plotFacing(p){ return (p.facing ? p.facing : '—') + (p.is_corner ? ' · Corner' : ''); }
+
+async function renderPlots(){
+  const plots = await fetchPlots();
+  plotsData.plots = plots;
   if (isEmployee()){
     return `
-    <div class="section-head"><h2>Properties</h2></div>
-    <div class="grid grid-3">${properties.map(p => `
+    <div class="section-head"><h2>Plots</h2></div>
+    <div class="grid grid-3">${plots.map(p => `
       <div class="card">
-        <div class="card-title">${escapeHtml(p.title)}</div>
+        <div class="card-title">${escapeHtml(plotLabel(p))}</div>
         <div class="card-sub">${escapeHtml(p.location || '')}</div>
         <div class="kv"><span class="k">Type</span><span class="v">${statusLabel(p.type)}</span></div>
+        <div class="kv"><span class="k">Extent</span><span class="v">${plotExtent(p)}</span></div>
+        <div class="kv"><span class="k">Facing</span><span class="v">${plotFacing(p)}</span></div>
+        ${p.road_width_ft ? `<div class="kv"><span class="k">Road width</span><span class="v">${p.road_width_ft} ft</span></div>` : ''}
         <div class="kv"><span class="k">Price</span><span class="v">${money(p.price)}</span></div>
         <div class="kv"><span class="k">Status</span><span class="v"><span class="pill pill-${p.status}">${statusLabel(p.status)}</span></span></div>
-      </div>`).join('') || '<div class="empty-state"><p>No properties listed yet.</p></div>'}
+      </div>`).join('') || '<div class="empty-state"><p>No plots listed yet.</p></div>'}
     </div>`;
   }
   return `
-  <div class="section-head"><h2>Properties</h2><button class="btn btn-primary" id="addPropBtn">${icon('plus')} Add Property</button></div>
+  <div class="section-head"><h2>Plots</h2><button class="btn btn-primary" id="addPropBtn">${icon('plus')} Add Plot</button></div>
   <div class="card table-card">
     <div class="table-wrap"><table>
-      <thead><tr><th>Title</th><th>Type</th><th>Location</th><th>Price</th><th>Status</th><th></th></tr></thead>
-      <tbody>${properties.map(p => `
+      <thead><tr><th>Plot</th><th>Type</th><th>Extent</th><th>Facing</th><th>Price</th><th>Status</th><th></th></tr></thead>
+      <tbody>${plots.map(p => `
         <tr>
-          <td>${escapeHtml(p.title)}</td><td>${statusLabel(p.type)}</td><td>${escapeHtml(p.location || '—')}</td>
+          <td>${escapeHtml(plotLabel(p))}${p.location ? `<div class="sub-text">${escapeHtml(p.location)}</div>` : ''}</td>
+          <td>${statusLabel(p.type)}</td><td class="num">${plotExtent(p)}</td><td>${plotFacing(p)}</td>
           <td class="num">${money(p.price)}</td><td><span class="pill pill-${p.status}">${statusLabel(p.status)}</span></td>
           <td style="display:flex;gap:6px;justify-content:flex-end">
             <button class="btn btn-sm btn-secondary" data-edit-prop="${p.id}" title="Edit">${icon('edit')}</button>
             <button class="btn btn-sm btn-danger" data-del-prop="${p.id}" title="Delete">${icon('trash')}</button>
           </td>
-        </tr>`).join('') || '<tr class="empty-row"><td colspan="6">No properties yet.</td></tr>'}</tbody>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="7">No plots yet.</td></tr>'}</tbody>
     </table></div>
   </div>`;
 }
 
-function bindProperties(){
+function bindPlots(){
   if (isEmployee()) return;
-  document.getElementById('addPropBtn').onclick = () => openPropertyModal(null);
-  document.querySelectorAll('[data-edit-prop]').forEach(b => b.onclick = () => openPropertyModal(propertiesData.properties.find(p => p.id === b.dataset.editProp)));
+  document.getElementById('addPropBtn').onclick = () => openPlotModal(null);
+  document.querySelectorAll('[data-edit-prop]').forEach(b => b.onclick = () => openPlotModal(plotsData.plots.find(p => p.id === b.dataset.editProp)));
   document.querySelectorAll('[data-del-prop]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this property?')) return;
-    const ok = await rpc('admin_delete_property', { p_admin_passcode: session.passcode, p_property_id: b.dataset.delProp });
-    if (ok) { toast('Property deleted', 'success'); renderRoute(); }
+    if (!confirm('Delete this plot?')) return;
+    const ok = await rpc('admin_delete_plot', { p_admin_passcode: session.passcode, p_plot_id: b.dataset.delProp });
+    if (ok) { toast('Plot deleted', 'success'); renderRoute(); }
   });
 }
 
-function openPropertyModal(prop){
+function openPlotModal(prop){
   const isNew = !prop;
   openModal(`
-    <div class="modal-panel">
-      <div class="modal-head"><h3>${isNew ? 'Add Property' : 'Edit Property'}</h3><button class="modal-close">${icon('close')}</button></div>
+    <div class="modal-panel wide">
+      <div class="modal-head"><h3>${isNew ? 'Add Plot' : 'Edit Plot'}</h3><button class="modal-close">${icon('close')}</button></div>
       <form id="propForm">
-        <label class="field"><span class="lbl">Title</span><input type="text" name="title" required value="${isNew ? '' : escapeHtml(prop.title)}"></label>
+        <label class="field"><span class="lbl">Title</span><input type="text" name="title" required placeholder="e.g. Corner plot near main road" value="${isNew ? '' : escapeHtml(prop.title)}"></label>
+        <div class="form-row">
+          <label class="field"><span class="lbl">Layout / venture name (optional)</span><input type="text" name="layout_name" placeholder="Leave blank for a standalone parcel" value="${isNew ? '' : escapeHtml(prop.layout_name || '')}"></label>
+          <label class="field"><span class="lbl">Plot number (optional)</span><input type="text" name="plot_number" value="${isNew ? '' : escapeHtml(prop.plot_number || '')}"></label>
+        </div>
         <div class="form-row">
           <label class="field"><span class="lbl">Type</span>
-            <select name="type">${['apartment', 'villa', 'plot', 'commercial'].map(t => `<option value="${t}" ${!isNew && prop.type === t ? 'selected' : ''}>${statusLabel(t)}</option>`).join('')}</select>
+            <select name="type">${PLOT_TYPES.map(t => `<option value="${t}" ${!isNew && prop.type === t ? 'selected' : ''}>${statusLabel(t)}</option>`).join('')}</select>
+          </label>
+          <label class="field"><span class="lbl">Location</span><input type="text" name="location" value="${isNew ? '' : escapeHtml(prop.location || '')}"></label>
+        </div>
+        <div class="form-row">
+          <label class="field"><span class="lbl">Extent</span><input type="number" name="extent_value" min="0" step="0.01" value="${isNew ? '' : prop.extent_value}"></label>
+          <label class="field"><span class="lbl">Unit</span>
+            <select name="extent_unit">${['sqft', 'cents', 'acres'].map(u => `<option value="${u}" ${!isNew && prop.extent_unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
+          </label>
+          <label class="field"><span class="lbl">Road width (ft, optional)</span><input type="number" name="road_width_ft" min="0" value="${!isNew && prop.road_width_ft != null ? prop.road_width_ft : ''}"></label>
+        </div>
+        <div class="form-row">
+          <label class="field"><span class="lbl">Facing</span>
+            <select name="facing">${FACINGS.map(f => `<option value="${f}" ${!isNew && prop.facing === f ? 'selected' : ''}>${f || '— Not specified —'}</option>`).join('')}</select>
           </label>
           <label class="field"><span class="lbl">Price (₹)</span><input type="number" name="price" min="0" value="${isNew ? 0 : prop.price}"></label>
         </div>
-        <label class="field"><span class="lbl">Location</span><input type="text" name="location" value="${isNew ? '' : escapeHtml(prop.location || '')}"></label>
-        ${!isNew ? `<label class="field"><span class="lbl">Status</span><select name="status">${['available', 'sold', 'rented'].map(s => `<option value="${s}" ${prop.status === s ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}</select></label>` : ''}
-        <button class="btn btn-primary btn-block" type="submit">${isNew ? 'Add property' : 'Save changes'}</button>
+        <label class="field" style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" name="is_corner" style="width:auto;min-height:0" ${!isNew && prop.is_corner ? 'checked' : ''}>
+          <span class="lbl" style="margin:0">Corner plot</span>
+        </label>
+        ${!isNew ? `<label class="field"><span class="lbl">Status</span><select name="status">${PLOT_STATUSES.map(s => `<option value="${s}" ${prop.status === s ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}</select></label>` : ''}
+        <button class="btn btn-primary btn-block" type="submit">${isNew ? 'Add plot' : 'Save changes'}</button>
       </form>
     </div>`);
   document.getElementById('propForm').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    const common = {
+      p_title: fd.get('title'), p_layout_name: fd.get('layout_name') || '', p_plot_number: fd.get('plot_number') || '',
+      p_type: fd.get('type'), p_location: fd.get('location') || '', p_extent_value: Number(fd.get('extent_value') || 0),
+      p_extent_unit: fd.get('extent_unit'), p_facing: fd.get('facing') || '', p_is_corner: fd.get('is_corner') === 'on',
+      p_road_width_ft: fd.get('road_width_ft') ? Number(fd.get('road_width_ft')) : null, p_price: Number(fd.get('price') || 0)
+    };
     if (isNew){
-      const res = await rpc('admin_add_property', { p_admin_passcode: session.passcode, p_title: fd.get('title'), p_type: fd.get('type'), p_location: fd.get('location') || '', p_price: Number(fd.get('price') || 0) });
-      if (res.success) { toast('Property added', 'success'); closeModal(); renderRoute(); }
+      const res = await rpc('admin_add_plot', { p_admin_passcode: session.passcode, ...common });
+      if (res.success) { toast('Plot added', 'success'); closeModal(); renderRoute(); }
     } else {
-      const ok = await rpc('admin_update_property', { p_admin_passcode: session.passcode, p_property_id: prop.id, p_title: fd.get('title'), p_type: fd.get('type'), p_location: fd.get('location') || '', p_price: Number(fd.get('price') || 0), p_status: fd.get('status') });
-      if (ok) { toast('Property updated', 'success'); closeModal(); renderRoute(); }
+      const ok = await rpc('admin_update_plot', { p_admin_passcode: session.passcode, p_plot_id: prop.id, ...common, p_status: fd.get('status') });
+      if (ok) { toast('Plot updated', 'success'); closeModal(); renderRoute(); }
     }
   };
 }
@@ -1290,7 +1333,7 @@ const ROUTES = {
   followups: { title: () => 'Follow-ups', sub: () => 'Stay on top of your leads', render: renderFollowUps, bind: bindFollowUps },
   activity: { title: () => isAdmin() ? 'Team Activity' : 'Daily Activity', sub: () => 'Calls, visits & meetings', render: renderActivity, bind: bindActivity },
   team: { title: () => isAdmin() ? 'Employees' : 'Team', sub: () => isAdmin() ? 'Manage accounts & targets' : 'Leaderboard', render: renderTeam, bind: bindTeam },
-  properties: { title: () => 'Properties', sub: () => 'Inventory', render: renderProperties, bind: bindProperties },
+  plots: { title: () => 'Plots', sub: () => 'Land inventory', render: renderPlots, bind: bindPlots },
   dayoffs: { title: () => isAdmin() ? 'Day Offs' : 'Day Off', sub: () => 'Requests & team calendar', render: renderDayOffs, bind: bindDayOffs },
 };
 

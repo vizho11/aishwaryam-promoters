@@ -5,6 +5,27 @@
 create extension if not exists pgcrypto;
 
 -- ============================================================
+-- ONE-TIME MIGRATION (only touches anything if the earlier generic "properties" schema
+-- exists — a fresh install has no "properties" table, so this whole block is a no-op then)
+-- ============================================================
+-- Earlier versions of this script modeled inventory as generic "properties" (apartment/
+-- villa/commercial/rented). This app is for land plots specifically, superseded below by
+-- "plots" (layout/plot number, extent, facing, corner, road width, available/booked/sold).
+do $$
+begin
+  if to_regclass('public.properties') is not null then
+    drop function if exists admin_add_property(text, text, text, text, numeric);
+    drop function if exists admin_update_property(text, uuid, text, text, text, numeric, text);
+    drop function if exists admin_delete_property(text, uuid);
+    drop function if exists list_properties(text, uuid, text);
+    if exists (select 1 from information_schema.columns where table_name = 'leads' and column_name = 'property_id') then
+      alter table leads rename column property_id to plot_id;
+    end if;
+    drop table properties cascade;
+  end if;
+end $$;
+
+-- ============================================================
 -- TABLES
 -- ============================================================
 
@@ -38,12 +59,20 @@ create table if not exists employees (
   created_at timestamptz not null default now()
 );
 
--- Property inventory.
-create table if not exists properties (
+-- Land inventory: individual parcels, or numbered plots within a layout/venture.
+-- layout_name/plot_number stay blank for a standalone parcel with no layout grouping.
+create table if not exists plots (
   id uuid primary key default gen_random_uuid(),
   title text not null,
-  type text not null default 'apartment',
+  layout_name text default '',
+  plot_number text default '',
+  type text not null default 'residential',
   location text default '',
+  extent_value numeric not null default 0,
+  extent_unit text not null default 'sqft',
+  facing text default '',
+  is_corner boolean not null default false,
+  road_width_ft numeric,
   price numeric not null default 0,
   status text not null default 'available',
   listed_at timestamptz not null default now()
@@ -55,7 +84,7 @@ create table if not exists leads (
   name text not null,
   phone text not null,
   source text default '',
-  property_id uuid references properties(id) on delete set null,
+  plot_id uuid,
   status text not null default 'new',
   assigned_to uuid references employees(id) on delete set null,
   budget numeric default 0,
@@ -65,6 +94,16 @@ create table if not exists leads (
   updated_at timestamptz not null default now()
 );
 create index if not exists leads_assigned_to_idx on leads(assigned_to);
+
+-- Added separately (rather than inline above) so it applies whether "leads" was just
+-- created fresh with a plot_id column, or already existed and had it renamed by the
+-- migration block — either way this adds the FK exactly once.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'leads_plot_id_fkey') then
+    alter table leads add constraint leads_plot_id_fkey foreign key (plot_id) references plots(id) on delete set null;
+  end if;
+end $$;
 
 create table if not exists follow_ups (
   id uuid primary key default gen_random_uuid(),
@@ -117,7 +156,7 @@ create index if not exists day_offs_employee_idx on day_offs(employee_id);
 alter table admin_config enable row level security;
 alter table auth_attempts enable row level security;
 alter table employees enable row level security;
-alter table properties enable row level security;
+alter table plots enable row level security;
 alter table leads enable row level security;
 alter table follow_ups enable row level security;
 alter table daily_activity enable row level security;
@@ -381,10 +420,13 @@ begin
 end;
 $$;
 
--- Properties ------------------------------------------------------------------
+-- Plots (land inventory) ------------------------------------------------------------------
 
-create or replace function admin_add_property(p_admin_passcode text, p_title text, p_type text, p_location text, p_price numeric)
-returns jsonb
+create or replace function admin_add_plot(
+  p_admin_passcode text, p_title text, p_layout_name text, p_plot_number text, p_type text,
+  p_location text, p_extent_value numeric, p_extent_unit text, p_facing text, p_is_corner boolean,
+  p_road_width_ft numeric, p_price numeric
+) returns jsonb
 language plpgsql security definer as $$
 declare
   v_id uuid;
@@ -392,42 +434,50 @@ begin
   if not admin_verify_passcode(p_admin_passcode) then
     return jsonb_build_object('success', false, 'error', 'invalid admin passcode');
   end if;
-  insert into properties (title, type, location, price) values (trim(p_title), p_type, coalesce(p_location,''), coalesce(p_price,0))
+  insert into plots (title, layout_name, plot_number, type, location, extent_value, extent_unit, facing, is_corner, road_width_ft, price)
+    values (trim(p_title), coalesce(p_layout_name,''), coalesce(p_plot_number,''), p_type, coalesce(p_location,''),
+            coalesce(p_extent_value,0), coalesce(p_extent_unit,'sqft'), coalesce(p_facing,''), coalesce(p_is_corner,false),
+            p_road_width_ft, coalesce(p_price,0))
     returning id into v_id;
   return jsonb_build_object('success', true, 'id', v_id);
 end;
 $$;
 
-create or replace function admin_update_property(p_admin_passcode text, p_property_id uuid, p_title text, p_type text, p_location text, p_price numeric, p_status text)
-returns boolean
+create or replace function admin_update_plot(
+  p_admin_passcode text, p_plot_id uuid, p_title text, p_layout_name text, p_plot_number text, p_type text,
+  p_location text, p_extent_value numeric, p_extent_unit text, p_facing text, p_is_corner boolean,
+  p_road_width_ft numeric, p_price numeric, p_status text
+) returns boolean
 language plpgsql security definer as $$
 begin
   if not admin_verify_passcode(p_admin_passcode) then return false; end if;
-  update properties set title = trim(p_title), type = p_type, location = coalesce(p_location,''),
-    price = coalesce(p_price,0), status = p_status
-  where id = p_property_id;
+  update plots set title = trim(p_title), layout_name = coalesce(p_layout_name,''), plot_number = coalesce(p_plot_number,''),
+    type = p_type, location = coalesce(p_location,''), extent_value = coalesce(p_extent_value,0),
+    extent_unit = coalesce(p_extent_unit,'sqft'), facing = coalesce(p_facing,''), is_corner = coalesce(p_is_corner,false),
+    road_width_ft = p_road_width_ft, price = coalesce(p_price,0), status = p_status
+  where id = p_plot_id;
   return found;
 end;
 $$;
 
-create or replace function admin_delete_property(p_admin_passcode text, p_property_id uuid)
+create or replace function admin_delete_plot(p_admin_passcode text, p_plot_id uuid)
 returns boolean
 language plpgsql security definer as $$
 begin
   if not admin_verify_passcode(p_admin_passcode) then return false; end if;
-  delete from properties where id = p_property_id;
+  delete from plots where id = p_plot_id;
   return found;
 end;
 $$;
 
-create or replace function list_properties(p_admin_passcode text, p_employee_id uuid, p_password text)
-returns setof properties
+create or replace function list_plots(p_admin_passcode text, p_employee_id uuid, p_password text)
+returns setof plots
 language plpgsql security definer as $$
 begin
   if not is_authorized(p_admin_passcode, p_employee_id, p_password) then
     return;
   end if;
-  return query select * from properties order by listed_at desc;
+  return query select * from plots order by listed_at desc;
 end;
 $$;
 
@@ -437,7 +487,7 @@ $$;
 -- (including leaving it unassigned).
 create or replace function add_lead(
   p_admin_passcode text, p_employee_id uuid, p_password text,
-  p_name text, p_phone text, p_source text, p_property_id uuid, p_budget numeric, p_notes text,
+  p_name text, p_phone text, p_source text, p_plot_id uuid, p_budget numeric, p_notes text,
   p_assigned_to uuid
 ) returns jsonb
 language plpgsql security definer as $$
@@ -450,8 +500,8 @@ begin
     return jsonb_build_object('success', false, 'error', 'invalid credentials');
   end if;
   v_assigned := case when v_is_admin then p_assigned_to else p_employee_id end;
-  insert into leads (name, phone, source, property_id, assigned_to, budget, notes)
-    values (trim(p_name), p_phone, coalesce(p_source,''), p_property_id, v_assigned, coalesce(p_budget,0), coalesce(p_notes,''))
+  insert into leads (name, phone, source, plot_id, assigned_to, budget, notes)
+    values (trim(p_name), p_phone, coalesce(p_source,''), p_plot_id, v_assigned, coalesce(p_budget,0), coalesce(p_notes,''))
     returning id into v_id;
   return jsonb_build_object('success', true, 'id', v_id);
 end;
