@@ -46,18 +46,25 @@ create table if not exists auth_attempts (
 create index if not exists auth_attempts_target_idx on auth_attempts(target, attempted_at);
 
 -- Employee accounts. Admin-provisioned, never self-signup. Locked down: no direct anon
--- access at all, only via the SECURITY DEFINER functions below.
+-- access at all, only via the SECURITY DEFINER functions below. Paid a fixed monthly
+-- salary, not commission — monthly_target stays purely as a sales KPI for the
+-- dashboard/leaderboard, independent of how the employee is actually paid.
 create table if not exists employees (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   email text not null unique,
   phone text default '',
   password_hash text not null,
+  job_role text not null default '',
   monthly_target numeric not null default 0,
-  commission_rate numeric not null default 0,
+  monthly_salary numeric not null default 0,
   active boolean not null default true,
   created_at timestamptz not null default now()
 );
+-- Migrating an existing install: add the new columns, drop the old commission one.
+alter table employees add column if not exists job_role text not null default '';
+alter table employees add column if not exists monthly_salary numeric not null default 0;
+alter table employees drop column if exists commission_rate;
 
 -- Land inventory: individual parcels, or numbered plots within a layout/venture.
 -- layout_name/plot_number stay blank for a standalone parcel with no layout grouping.
@@ -257,7 +264,7 @@ begin
   if v_emp.password_hash = crypt(p_password, v_emp.password_hash) then
     return jsonb_build_object('success', true, 'employee', jsonb_build_object(
       'id', v_emp.id, 'name', v_emp.name, 'email', v_emp.email, 'phone', v_emp.phone,
-      'monthly_target', v_emp.monthly_target, 'commission_rate', v_emp.commission_rate
+      'job_role', v_emp.job_role, 'monthly_target', v_emp.monthly_target, 'monthly_salary', v_emp.monthly_salary
     ));
   else
     perform record_auth_attempt(v_target);
@@ -314,15 +321,22 @@ $$;
 
 -- Employee management (admin-only writes) -------------------------------------
 
+-- These three change shape (commission_rate -> job_role + monthly_salary), and Postgres
+-- won't let CREATE OR REPLACE rename/add/remove parameters or return columns on an existing
+-- function of the same name — so drop the old shapes first (no-op on a fresh install).
+drop function if exists admin_list_employees(text);
+drop function if exists admin_create_employee(text, text, text, text, text, numeric, numeric);
+drop function if exists admin_update_employee(text, uuid, text, text, numeric, numeric, boolean);
+
 create or replace function admin_list_employees(p_admin_passcode text)
-returns table(id uuid, name text, email text, phone text, monthly_target numeric,
-              commission_rate numeric, active boolean, created_at timestamptz)
+returns table(id uuid, name text, email text, phone text, job_role text, monthly_target numeric,
+              monthly_salary numeric, active boolean, created_at timestamptz)
 language plpgsql security definer as $$
 begin
   if not admin_verify_passcode(p_admin_passcode) then
     raise exception 'invalid admin passcode';
   end if;
-  return query select e.id, e.name, e.email, e.phone, e.monthly_target, e.commission_rate,
+  return query select e.id, e.name, e.email, e.phone, e.job_role, e.monthly_target, e.monthly_salary,
                       e.active, e.created_at
   from employees e order by e.created_at desc;
 end;
@@ -330,7 +344,7 @@ $$;
 
 create or replace function admin_create_employee(
   p_admin_passcode text, p_name text, p_email text, p_phone text, p_password text,
-  p_monthly_target numeric, p_commission_rate numeric
+  p_job_role text, p_monthly_target numeric, p_monthly_salary numeric
 ) returns jsonb
 language plpgsql security definer as $$
 declare
@@ -343,23 +357,23 @@ begin
   if exists(select 1 from employees where lower(email) = v_email) then
     return jsonb_build_object('success', false, 'error', 'An account with this email already exists.');
   end if;
-  insert into employees (name, email, phone, password_hash, monthly_target, commission_rate)
+  insert into employees (name, email, phone, password_hash, job_role, monthly_target, monthly_salary)
     values (trim(p_name), v_email, coalesce(p_phone,''), crypt(p_password, gen_salt('bf')),
-            coalesce(p_monthly_target,0), coalesce(p_commission_rate,0))
+            coalesce(p_job_role,''), coalesce(p_monthly_target,0), coalesce(p_monthly_salary,0))
     returning id into v_id;
   return jsonb_build_object('success', true, 'id', v_id, 'email', v_email);
 end;
 $$;
 
 create or replace function admin_update_employee(
-  p_admin_passcode text, p_employee_id uuid, p_name text, p_phone text,
-  p_monthly_target numeric, p_commission_rate numeric, p_active boolean
+  p_admin_passcode text, p_employee_id uuid, p_name text, p_phone text, p_job_role text,
+  p_monthly_target numeric, p_monthly_salary numeric, p_active boolean
 ) returns boolean
 language plpgsql security definer as $$
 begin
   if not admin_verify_passcode(p_admin_passcode) then return false; end if;
-  update employees set name = trim(p_name), phone = coalesce(p_phone,''),
-    monthly_target = coalesce(p_monthly_target,0), commission_rate = coalesce(p_commission_rate,0),
+  update employees set name = trim(p_name), phone = coalesce(p_phone,''), job_role = coalesce(p_job_role,''),
+    monthly_target = coalesce(p_monthly_target,0), monthly_salary = coalesce(p_monthly_salary,0),
     active = p_active
   where id = p_employee_id;
   return found;
@@ -386,7 +400,7 @@ begin
 end;
 $$;
 
--- Name-only projection (no email/phone/target/commission) for assignment dropdowns and the
+-- Name-only projection (no email/phone/target/salary) for assignment dropdowns and the
 -- leaderboard — visible to any logged-in employee or admin, not just admin.
 create or replace function list_employees_public(p_admin_passcode text, p_employee_id uuid, p_password text)
 returns table(id uuid, name text)
@@ -400,7 +414,7 @@ end;
 $$;
 
 -- Ranks employees by closed-won value within a given month. Visible to any logged-in employee
--- or admin — deliberately excludes commission/target, which stay private to the employee and
+-- or admin — deliberately excludes salary/target, which stay private to the employee and
 -- admin (see employee_login and admin_list_employees).
 create or replace function get_leaderboard(p_admin_passcode text, p_employee_id uuid, p_password text, p_month_start date default date_trunc('month', now())::date)
 returns table(employee_id uuid, name text, closed_count bigint, closed_value numeric)

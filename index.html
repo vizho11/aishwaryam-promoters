@@ -676,15 +676,14 @@ async function renderDashboard(){
   if (isEmployee()){
     const target = Number(session.employee.monthly_target || 0);
     const progress = target ? Math.min(100, stats.closedValueThisMonth / target * 100) : 0;
-    const commission = stats.closedValueThisMonth * (Number(session.employee.commission_rate || 0) / 100);
     targetCard = `
     <div class="card">
       <div class="card-title">This month's target</div>
       <div class="card-sub">${money(stats.closedValueThisMonth)} of ${money(target)} closed</div>
       <div class="progress-track" style="margin-bottom:14px"><div class="progress-fill" style="width:${progress}%"></div></div>
       <div class="kv"><span class="k">Progress</span><span class="v">${Math.round(progress)}%</span></div>
-      <div class="kv"><span class="k">Commission earned (est.)</span><span class="v">${money(commission)}</span></div>
-      <div class="kv"><span class="k">Commission rate</span><span class="v">${session.employee.commission_rate}%</span></div>
+      <div class="kv"><span class="k">Job role</span><span class="v">${escapeHtml(session.employee.job_role || '—')}</span></div>
+      <div class="kv"><span class="k">Monthly salary</span><span class="v">${money(session.employee.monthly_salary)}</span></div>
     </div>`;
   } else {
     const pendingDayOffs = dayOffs.filter(d => d.status === 'pending').length;
@@ -1119,18 +1118,19 @@ async function renderTeam(){
   <div class="section-head"><h2>Employees</h2><button class="btn btn-primary" id="addEmpBtn">${icon('plus')} Add Employee</button></div>
   <div class="card table-card">
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Target</th><th>Commission</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Target</th><th>Salary</th><th>Status</th><th></th></tr></thead>
       <tbody>${employees.map(e => `
         <tr>
           <td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.email)}</td><td>${escapeHtml(e.phone || '—')}</td>
-          <td class="num">${money(e.monthly_target)}</td><td class="num">${e.commission_rate}%</td>
+          <td>${escapeHtml(e.job_role || '—')}</td>
+          <td class="num">${money(e.monthly_target)}</td><td class="num">${money(e.monthly_salary)}</td>
           <td><span class="pill pill-${e.active ? 'active' : 'inactive'}">${e.active ? 'Active' : 'Inactive'}</span></td>
           <td style="display:flex;gap:6px;justify-content:flex-end">
             <button class="btn btn-sm btn-secondary" data-edit-emp="${e.id}" title="Edit">${icon('edit')}</button>
             <button class="btn btn-sm btn-secondary" data-reset-emp="${e.id}" title="Reset password">${icon('key')}</button>
             <button class="btn btn-sm btn-danger" data-del-emp="${e.id}" title="Delete">${icon('trash')}</button>
           </td>
-        </tr>`).join('') || '<tr class="empty-row"><td colspan="7">No employees yet.</td></tr>'}</tbody>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="8">No employees yet.</td></tr>'}</tbody>
     </table></div>
   </div>`;
 }
@@ -1156,11 +1156,12 @@ function openEmployeeModal(emp){
         <label class="field"><span class="lbl">Name</span><input type="text" name="name" required value="${isNew ? '' : escapeHtml(emp.name)}"></label>
         <label class="field"><span class="lbl">Email</span><input type="email" name="email" required ${isNew ? '' : 'readonly'} value="${isNew ? '' : escapeHtml(emp.email)}"></label>
         <label class="field"><span class="lbl">Phone</span><input type="tel" name="phone" value="${isNew ? '' : escapeHtml(emp.phone || '')}"></label>
+        <label class="field"><span class="lbl">Job role / designation</span><input type="text" name="job_role" placeholder="e.g. Sales Executive" value="${isNew ? '' : escapeHtml(emp.job_role || '')}"></label>
         ${isNew ? `<label class="field"><span class="lbl">Initial password</span><input type="text" name="password" required></label>
         <p class="hint" style="margin-top:-10px;margin-bottom:14px">Shown only once here — copy it and share with the employee directly.</p>` : ''}
         <div class="form-row">
-          <label class="field"><span class="lbl">Monthly target (₹)</span><input type="number" name="monthly_target" min="0" value="${isNew ? 0 : emp.monthly_target}"></label>
-          <label class="field"><span class="lbl">Commission (%)</span><input type="number" name="commission_rate" min="0" max="100" step="0.5" value="${isNew ? 0 : emp.commission_rate}"></label>
+          <label class="field"><span class="lbl">Monthly sales target (₹)</span><input type="number" name="monthly_target" min="0" value="${isNew ? 0 : emp.monthly_target}"></label>
+          <label class="field"><span class="lbl">Monthly salary (₹)</span><input type="number" name="monthly_salary" min="0" value="${isNew ? 0 : emp.monthly_salary}"></label>
         </div>
         ${!isNew ? `<label class="field"><span class="lbl">Status</span><select name="active"><option value="true" ${emp.active ? 'selected' : ''}>Active</option><option value="false" ${!emp.active ? 'selected' : ''}>Inactive</option></select></label>` : ''}
         <button class="btn btn-primary btn-block" type="submit">${isNew ? 'Create employee' : 'Save changes'}</button>
@@ -1172,13 +1173,15 @@ function openEmployeeModal(emp){
     if (isNew){
       const res = await rpc('admin_create_employee', {
         p_admin_passcode: session.passcode, p_name: fd.get('name'), p_email: fd.get('email'), p_phone: fd.get('phone') || '',
-        p_password: fd.get('password'), p_monthly_target: Number(fd.get('monthly_target') || 0), p_commission_rate: Number(fd.get('commission_rate') || 0)
+        p_password: fd.get('password'), p_job_role: fd.get('job_role') || '',
+        p_monthly_target: Number(fd.get('monthly_target') || 0), p_monthly_salary: Number(fd.get('monthly_salary') || 0)
       });
       if (res.success) { toast('Employee created', 'success'); closeModal(); renderRoute(); } else toast(res.error || 'Could not create', 'error');
     } else {
       const ok = await rpc('admin_update_employee', {
         p_admin_passcode: session.passcode, p_employee_id: emp.id, p_name: fd.get('name'), p_phone: fd.get('phone') || '',
-        p_monthly_target: Number(fd.get('monthly_target') || 0), p_commission_rate: Number(fd.get('commission_rate') || 0), p_active: fd.get('active') === 'true'
+        p_job_role: fd.get('job_role') || '', p_monthly_target: Number(fd.get('monthly_target') || 0),
+        p_monthly_salary: Number(fd.get('monthly_salary') || 0), p_active: fd.get('active') === 'true'
       });
       if (ok) { toast('Employee updated', 'success'); closeModal(); renderRoute(); }
     }

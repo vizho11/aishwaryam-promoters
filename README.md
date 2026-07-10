@@ -1,7 +1,7 @@
 # aishwaryam-promoters
 
 Land promoter team console — employee logins, daily activity, follow-ups, lead pipeline &
-conversion rate, targets/commission/leaderboard, land plot inventory, and day-off requests.
+conversion rate, targets/salary/leaderboard, land plot inventory, and day-off requests.
 
 `index.html` is the whole app — no build step, no bundler. All data (employees, leads,
 follow-ups, daily activity, day-offs, plots) lives in a real **Supabase** (Postgres)
@@ -65,7 +65,7 @@ trusting the client's "I'm logged in" state), so calling the API directly bypass
   and manage everything.
 - The leaderboard and team day-off calendar are visible to any logged-in employee (not just
   admin) but only expose names and aggregate numbers — never another employee's email, phone,
-  target, commission rate, or personal leave reason.
+  target, salary, or personal leave reason.
 
 ## Notes
 
@@ -82,10 +82,11 @@ trusting the client's "I'm logged in" state), so calling the API directly bypass
   don't map cleanly — only a concern if you'd added real property data there already.
 - **Conversion rate** = closed-won leads ÷ total leads (all-time), shown per employee and
   company-wide.
-- **Leaderboard, targets & commission**: admin sets a monthly ₹ target and commission % per
-  employee; the dashboard shows progress toward that target and an estimated commission
-  figure for deals closed so far this month — both computed client-side from real lead data,
-  nothing hardcoded.
+- **Leaderboard & targets**: admin sets a monthly ₹ sales target and a fixed monthly salary
+  per employee (job role/designation shown alongside); the dashboard shows progress toward
+  that target for motivation/tracking — employees are paid a fixed salary, not commission, so
+  pay is independent of the target — computed client-side from real lead data, nothing
+  hardcoded.
 - **Day-off calendar**: any approved time off shows up on a shared "who's out" list visible
   to the whole team (name + dates only, not the reason) so people can plan around it.
 - Palette: deep navy/charcoal sidebar with a warm brass-gold accent — avoids the "generic AI
