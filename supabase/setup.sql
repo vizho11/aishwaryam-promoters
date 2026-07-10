@@ -483,6 +483,11 @@ $$;
 
 -- Leads / pipeline --------------------------------------------------------------
 
+-- Postgres won't let CREATE OR REPLACE rename a parameter (p_property_id -> p_plot_id
+-- below), only its body/return type — so the earlier "properties"-era signature has to be
+-- dropped explicitly first. A no-op if it was never created (fresh install).
+drop function if exists add_lead(text, uuid, text, text, text, text, uuid, numeric, text, uuid);
+
 -- Employees may only create leads assigned to themselves; admin may assign to anyone
 -- (including leaving it unassigned).
 create or replace function add_lead(
