@@ -65,9 +65,32 @@ create table if not exists employees (
 alter table employees add column if not exists job_role text not null default '';
 alter table employees add column if not exists monthly_salary numeric not null default 0;
 alter table employees drop column if exists commission_rate;
+-- Team grouping for the Team Performance view: '' (e.g. the manager, ungrouped), 'A', or 'B'.
+alter table employees add column if not exists team_group text not null default '';
+
+-- Layouts / ventures: named groupings of plots. Price is driven by *position* within the
+-- layout (corner/front/road-facing/back/no-road-connection), not by plot size — each layout
+-- carries a small price/sqft table in layout_price_tiers. "lowest" and "highest" are always
+-- present (the baseline and premium rate); the position-specific ones are optional extras.
+create table if not exists layouts (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  num_plots int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists layout_price_tiers (
+  id uuid primary key default gen_random_uuid(),
+  layout_id uuid not null references layouts(id) on delete cascade,
+  position text not null check (position in ('lowest','highest','corner','front','road_facing','back','no_road')),
+  price_per_sqft numeric not null default 0,
+  unique(layout_id, position)
+);
 
 -- Land inventory: individual parcels, or numbered plots within a layout/venture.
 -- layout_name/plot_number stay blank for a standalone parcel with no layout grouping.
+-- layout_id links to layouts (drives auto price calc); layout_name is kept in sync with it
+-- for display so existing plot-label rendering doesn't need to change.
 create table if not exists plots (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -84,6 +107,11 @@ create table if not exists plots (
   status text not null default 'available',
   listed_at timestamptz not null default now()
 );
+alter table plots add column if not exists layout_id uuid references layouts(id) on delete set null;
+alter table plots add column if not exists is_front boolean not null default false;
+alter table plots add column if not exists is_road_facing boolean not null default false;
+alter table plots add column if not exists is_back boolean not null default false;
+alter table plots add column if not exists has_no_road boolean not null default false;
 
 -- Lead / client pipeline — the backbone conversion rate and follow-ups are computed from.
 create table if not exists leads (
@@ -173,6 +201,8 @@ create index if not exists day_offs_employee_idx on day_offs(employee_id);
 alter table admin_config enable row level security;
 alter table auth_attempts enable row level security;
 alter table employees enable row level security;
+alter table layouts enable row level security;
+alter table layout_price_tiers enable row level security;
 alter table plots enable row level security;
 alter table leads enable row level security;
 alter table follow_ups enable row level security;
@@ -340,21 +370,21 @@ drop function if exists admin_update_employee(text, uuid, text, text, numeric, n
 
 create or replace function admin_list_employees(p_admin_passcode text)
 returns table(id uuid, name text, email text, phone text, job_role text, monthly_target numeric,
-              monthly_salary numeric, active boolean, created_at timestamptz)
+              monthly_salary numeric, active boolean, created_at timestamptz, team_group text)
 language plpgsql security definer as $$
 begin
   if not admin_verify_passcode(p_admin_passcode) then
     raise exception 'invalid admin passcode';
   end if;
   return query select e.id, e.name, e.email, e.phone, e.job_role, e.monthly_target, e.monthly_salary,
-                      e.active, e.created_at
+                      e.active, e.created_at, e.team_group
   from employees e order by e.created_at desc;
 end;
 $$;
 
 create or replace function admin_create_employee(
   p_admin_passcode text, p_name text, p_email text, p_phone text, p_password text,
-  p_job_role text, p_monthly_target numeric, p_monthly_salary numeric
+  p_job_role text, p_monthly_target numeric, p_monthly_salary numeric, p_team_group text default ''
 ) returns jsonb
 language plpgsql security definer as $$
 declare
@@ -367,9 +397,9 @@ begin
   if exists(select 1 from employees where lower(email) = v_email) then
     return jsonb_build_object('success', false, 'error', 'An account with this email already exists.');
   end if;
-  insert into employees (name, email, phone, password_hash, job_role, monthly_target, monthly_salary)
+  insert into employees (name, email, phone, password_hash, job_role, monthly_target, monthly_salary, team_group)
     values (trim(p_name), v_email, coalesce(p_phone,''), crypt(p_password, gen_salt('bf')),
-            coalesce(p_job_role,''), coalesce(p_monthly_target,0), coalesce(p_monthly_salary,0))
+            coalesce(p_job_role,''), coalesce(p_monthly_target,0), coalesce(p_monthly_salary,0), coalesce(p_team_group,''))
     returning id into v_id;
   return jsonb_build_object('success', true, 'id', v_id, 'email', v_email);
 end;
@@ -377,14 +407,14 @@ $$;
 
 create or replace function admin_update_employee(
   p_admin_passcode text, p_employee_id uuid, p_name text, p_phone text, p_job_role text,
-  p_monthly_target numeric, p_monthly_salary numeric, p_active boolean
+  p_monthly_target numeric, p_monthly_salary numeric, p_active boolean, p_team_group text default ''
 ) returns boolean
 language plpgsql security definer as $$
 begin
   if not admin_verify_passcode(p_admin_passcode) then return false; end if;
   update employees set name = trim(p_name), phone = coalesce(p_phone,''), job_role = coalesce(p_job_role,''),
     monthly_target = coalesce(p_monthly_target,0), monthly_salary = coalesce(p_monthly_salary,0),
-    active = p_active
+    active = p_active, team_group = coalesce(p_team_group,'')
   where id = p_employee_id;
   return found;
 end;
@@ -444,12 +474,78 @@ begin
 end;
 $$;
 
+-- Layouts (price tiers by position) ----------------------------------------------------
+
+create or replace function admin_add_layout(p_admin_passcode text, p_name text, p_num_plots int, p_tiers jsonb)
+returns jsonb
+language plpgsql security definer as $$
+declare
+  v_id uuid;
+begin
+  if not admin_verify_passcode(p_admin_passcode) then
+    return jsonb_build_object('success', false, 'error', 'invalid admin passcode');
+  end if;
+  if p_tiers is null or jsonb_array_length(p_tiers) = 0 then
+    return jsonb_build_object('success', false, 'error', 'at least a lowest and highest price/sqft are required');
+  end if;
+  insert into layouts (name, num_plots) values (trim(p_name), coalesce(p_num_plots,0)) returning id into v_id;
+  insert into layout_price_tiers (layout_id, position, price_per_sqft)
+    select v_id, elem->>'position', coalesce((elem->>'price_per_sqft')::numeric, 0)
+    from jsonb_array_elements(p_tiers) as elem;
+  return jsonb_build_object('success', true, 'id', v_id);
+end;
+$$;
+
+create or replace function admin_update_layout(p_admin_passcode text, p_layout_id uuid, p_name text, p_num_plots int, p_tiers jsonb)
+returns boolean
+language plpgsql security definer as $$
+begin
+  if not admin_verify_passcode(p_admin_passcode) then return false; end if;
+  update layouts set name = trim(p_name), num_plots = coalesce(p_num_plots,0) where id = p_layout_id;
+  if not found then return false; end if;
+  delete from layout_price_tiers where layout_id = p_layout_id;
+  insert into layout_price_tiers (layout_id, position, price_per_sqft)
+    select p_layout_id, elem->>'position', coalesce((elem->>'price_per_sqft')::numeric, 0)
+    from jsonb_array_elements(coalesce(p_tiers, '[]'::jsonb)) as elem;
+  -- keep plots' cached layout_name in sync with a rename
+  update plots set layout_name = trim(p_name) where layout_id = p_layout_id;
+  return true;
+end;
+$$;
+
+create or replace function admin_delete_layout(p_admin_passcode text, p_layout_id uuid)
+returns boolean
+language plpgsql security definer as $$
+begin
+  if not admin_verify_passcode(p_admin_passcode) then return false; end if;
+  delete from layouts where id = p_layout_id;
+  return found;
+end;
+$$;
+
+create or replace function list_layouts(p_admin_passcode text, p_employee_id uuid, p_password text)
+returns table(id uuid, name text, num_plots int, created_at timestamptz, tiers jsonb)
+language plpgsql security definer as $$
+begin
+  if not is_authorized(p_admin_passcode, p_employee_id, p_password) then
+    return;
+  end if;
+  return query
+    select l.id, l.name, l.num_plots, l.created_at,
+      coalesce(jsonb_agg(jsonb_build_object('position', t.position, 'price_per_sqft', t.price_per_sqft))
+        filter (where t.id is not null), '[]'::jsonb) as tiers
+    from layouts l left join layout_price_tiers t on t.layout_id = l.id
+    group by l.id order by l.name;
+end;
+$$;
+
 -- Plots (land inventory) ------------------------------------------------------------------
 
 create or replace function admin_add_plot(
   p_admin_passcode text, p_title text, p_layout_name text, p_plot_number text, p_type text,
   p_location text, p_extent_value numeric, p_extent_unit text, p_facing text, p_is_corner boolean,
-  p_road_width_ft numeric, p_price numeric
+  p_road_width_ft numeric, p_price numeric, p_layout_id uuid default null, p_is_front boolean default false,
+  p_is_road_facing boolean default false, p_is_back boolean default false, p_has_no_road boolean default false
 ) returns jsonb
 language plpgsql security definer as $$
 declare
@@ -458,10 +554,12 @@ begin
   if not admin_verify_passcode(p_admin_passcode) then
     return jsonb_build_object('success', false, 'error', 'invalid admin passcode');
   end if;
-  insert into plots (title, layout_name, plot_number, type, location, extent_value, extent_unit, facing, is_corner, road_width_ft, price)
+  insert into plots (title, layout_name, plot_number, type, location, extent_value, extent_unit, facing, is_corner,
+                      road_width_ft, price, layout_id, is_front, is_road_facing, is_back, has_no_road)
     values (trim(p_title), coalesce(p_layout_name,''), coalesce(p_plot_number,''), p_type, coalesce(p_location,''),
             coalesce(p_extent_value,0), coalesce(p_extent_unit,'sqft'), coalesce(p_facing,''), coalesce(p_is_corner,false),
-            p_road_width_ft, coalesce(p_price,0))
+            p_road_width_ft, coalesce(p_price,0), p_layout_id, coalesce(p_is_front,false), coalesce(p_is_road_facing,false),
+            coalesce(p_is_back,false), coalesce(p_has_no_road,false))
     returning id into v_id;
   return jsonb_build_object('success', true, 'id', v_id);
 end;
@@ -470,7 +568,8 @@ $$;
 create or replace function admin_update_plot(
   p_admin_passcode text, p_plot_id uuid, p_title text, p_layout_name text, p_plot_number text, p_type text,
   p_location text, p_extent_value numeric, p_extent_unit text, p_facing text, p_is_corner boolean,
-  p_road_width_ft numeric, p_price numeric, p_status text
+  p_road_width_ft numeric, p_price numeric, p_status text, p_layout_id uuid default null, p_is_front boolean default false,
+  p_is_road_facing boolean default false, p_is_back boolean default false, p_has_no_road boolean default false
 ) returns boolean
 language plpgsql security definer as $$
 begin
@@ -478,7 +577,9 @@ begin
   update plots set title = trim(p_title), layout_name = coalesce(p_layout_name,''), plot_number = coalesce(p_plot_number,''),
     type = p_type, location = coalesce(p_location,''), extent_value = coalesce(p_extent_value,0),
     extent_unit = coalesce(p_extent_unit,'sqft'), facing = coalesce(p_facing,''), is_corner = coalesce(p_is_corner,false),
-    road_width_ft = p_road_width_ft, price = coalesce(p_price,0), status = p_status
+    road_width_ft = p_road_width_ft, price = coalesce(p_price,0), status = p_status, layout_id = p_layout_id,
+    is_front = coalesce(p_is_front,false), is_road_facing = coalesce(p_is_road_facing,false),
+    is_back = coalesce(p_is_back,false), has_no_road = coalesce(p_has_no_road,false)
   where id = p_plot_id;
   return found;
 end;

@@ -365,6 +365,8 @@ const ICONS = {
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg>',
   key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M13 10l2 2"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg>',
+  layout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+  performance: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12.5" y="8" width="3" height="10"/><rect x="18" y="5" width="3" height="13"/></svg>',
 };
 function icon(name){ return ICONS[name] || ''; }
 
@@ -596,7 +598,9 @@ const ADMIN_NAV = [
   ['followups','followup','Follow-ups'],
   ['activity','activity','Activity'],
   ['team','team','Employees'],
+  ['performance','performance','Team Performance'],
   ['plots','plot','Plots'],
+  ['layouts','layout','Layouts'],
   ['dayoffs','dayoff','Day Offs'],
 ];
 
@@ -684,6 +688,7 @@ async function fetchMyOrAllDayOffs(){ return await rpc('list_day_offs', authTrip
 async function fetchLeaderboard(){ return await rpc('get_leaderboard', authTriple()); }
 async function fetchEmployeesPublic(){ return await rpc('list_employees_public', authTriple()); }
 async function fetchPlots(){ return await rpc('list_plots', authTriple()); }
+async function fetchLayouts(){ return await rpc('list_layouts', authTriple()); }
 
 function dueBucket(followUp){
   if (followUp.status !== 'pending') return followUp.status;
@@ -810,7 +815,7 @@ let followUpsData = { followUps: [], leads: [] };
 let activityData = { activity: [], employees: [] };
 let dayOffsData = { dayOffs: [] };
 let teamData = { employees: [] };
-let plotsData = { plots: [] };
+let plotsData = { plots: [], layouts: [] };
 let fuFilter = 'all';
 let activityFilterEmp = '';
 
@@ -1167,11 +1172,12 @@ async function renderTeam(){
   <div class="section-head"><h2>Employees</h2><button class="btn btn-primary" id="addEmpBtn">${icon('plus')} Add Employee</button></div>
   <div class="card table-card">
     <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Target</th><th>Salary</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Group</th><th>Target</th><th>Salary</th><th>Status</th><th></th></tr></thead>
       <tbody>${employees.map(e => `
         <tr>
           <td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.email)}</td><td>${escapeHtml(e.phone || '—')}</td>
           <td>${escapeHtml(e.job_role || '—')}</td>
+          <td>${e.team_group ? 'Group ' + escapeHtml(e.team_group) : '—'}</td>
           <td class="num">${money(e.monthly_target)}</td><td class="num">${money(e.monthly_salary)}</td>
           <td><span class="pill pill-${e.active ? 'active' : 'inactive'}">${e.active ? 'Active' : 'Inactive'}</span></td>
           <td style="display:flex;gap:6px;justify-content:flex-end">
@@ -1179,7 +1185,7 @@ async function renderTeam(){
             <button class="btn btn-sm btn-secondary" data-reset-emp="${e.id}" title="Reset password">${icon('key')}</button>
             <button class="btn btn-sm btn-danger" data-del-emp="${e.id}" title="Delete">${icon('trash')}</button>
           </td>
-        </tr>`).join('') || '<tr class="empty-row"><td colspan="8">No employees yet.</td></tr>'}</tbody>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="9">No employees yet.</td></tr>'}</tbody>
     </table></div>
   </div>`;
 }
@@ -1196,6 +1202,59 @@ function bindTeam(){
   });
 }
 
+// ============================================================
+// Team Performance — group (Group A / Group B / Management) & individual, this month
+// ============================================================
+async function renderPerformance(){
+  const [employees, lb] = await Promise.all([
+    rpc('admin_list_employees', { p_admin_passcode: session.passcode }),
+    fetchLeaderboard()
+  ]);
+  const lbById = {};
+  lb.forEach(r => { lbById[r.employee_id] = r; });
+  const rows = employees.filter(e => e.active).map(e => {
+    const r = lbById[e.id] || { closed_count: 0, closed_value: 0 };
+    const target = Number(e.monthly_target || 0);
+    const closedValue = Number(r.closed_value || 0);
+    return { ...e, closed_count: Number(r.closed_count || 0), closed_value: closedValue, target, attainment: target ? closedValue / target : null };
+  }).sort((a, b) => b.closed_value - a.closed_value);
+
+  const groups = [{ key: 'A', label: 'Group A' }, { key: 'B', label: 'Group B' }, { key: '', label: 'Management' }];
+  const groupCards = groups.map(g => {
+    const members = rows.filter(r => (r.team_group || '') === g.key);
+    if (!members.length) return '';
+    const closedValue = members.reduce((s, m) => s + m.closed_value, 0);
+    const closedCount = members.reduce((s, m) => s + m.closed_count, 0);
+    const target = members.reduce((s, m) => s + m.target, 0);
+    const attainment = target ? closedValue / target : null;
+    return `
+    <div class="card">
+      <div class="card-title">${g.label}</div>
+      <div class="card-sub">${members.map(m => escapeHtml(m.name) + (m.job_role ? ' · ' + escapeHtml(m.job_role) : '')).join(', ')}</div>
+      <div class="kv"><span class="k">Deals closed</span><span class="v">${closedCount}</span></div>
+      <div class="kv"><span class="k">Value closed</span><span class="v">${money(closedValue)}</span></div>
+      <div class="kv"><span class="k">Target</span><span class="v">${money(target)}</span></div>
+      <div class="kv"><span class="k">Attainment</span><span class="v">${attainment == null ? '—' : pct(attainment)}</span></div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="section-head"><h2 style="display:inline-flex;align-items:center;gap:8px"><span class="title-icon gold">${icon('performance')}</span> Team Performance</h2><span class="sub-text">This month</span></div>
+  <div class="grid grid-3" style="margin-bottom:20px">${groupCards || '<div class="empty-state"><p>No active employees yet.</p></div>'}</div>
+  <div class="card table-card">
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Role</th><th>Group</th><th>Deals Closed</th><th>Value Closed</th><th>Target</th><th>Attainment</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.job_role || '—')}</td>
+          <td>${r.team_group ? 'Group ' + escapeHtml(r.team_group) : '—'}</td>
+          <td class="num">${r.closed_count}</td><td class="num">${money(r.closed_value)}</td>
+          <td class="num">${money(r.target)}</td><td class="num">${r.attainment == null ? '—' : pct(r.attainment)}</td>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="7">No data yet.</td></tr>'}</tbody>
+    </table></div>
+  </div>`;
+}
+
 function openEmployeeModal(emp){
   const isNew = !emp;
   openModal(`
@@ -1206,6 +1265,13 @@ function openEmployeeModal(emp){
         <label class="field"><span class="lbl">Email</span><input type="email" name="email" required ${isNew ? '' : 'readonly'} value="${isNew ? '' : escapeHtml(emp.email)}"></label>
         <label class="field"><span class="lbl">Phone</span><input type="tel" name="phone" value="${isNew ? '' : escapeHtml(emp.phone || '')}"></label>
         <label class="field"><span class="lbl">Job role / designation</span><input type="text" name="job_role" placeholder="e.g. Sales Executive" value="${isNew ? '' : escapeHtml(emp.job_role || '')}"></label>
+        <label class="field"><span class="lbl">Team group</span>
+          <select name="team_group">
+            <option value="" ${isNew || !emp.team_group ? 'selected' : ''}>— None (e.g. Manager) —</option>
+            <option value="A" ${!isNew && emp.team_group === 'A' ? 'selected' : ''}>Group A</option>
+            <option value="B" ${!isNew && emp.team_group === 'B' ? 'selected' : ''}>Group B</option>
+          </select>
+        </label>
         ${isNew ? `<label class="field"><span class="lbl">Initial password</span><input type="text" name="password" required></label>
         <p class="hint" style="margin-top:-10px;margin-bottom:14px">Shown only once here — copy it and share with the employee directly.</p>` : ''}
         <div class="form-row">
@@ -1223,14 +1289,16 @@ function openEmployeeModal(emp){
       const res = await rpc('admin_create_employee', {
         p_admin_passcode: session.passcode, p_name: fd.get('name'), p_email: fd.get('email'), p_phone: fd.get('phone') || '',
         p_password: fd.get('password'), p_job_role: fd.get('job_role') || '',
-        p_monthly_target: Number(fd.get('monthly_target') || 0), p_monthly_salary: Number(fd.get('monthly_salary') || 0)
+        p_monthly_target: Number(fd.get('monthly_target') || 0), p_monthly_salary: Number(fd.get('monthly_salary') || 0),
+        p_team_group: fd.get('team_group') || ''
       });
       if (res.success) { toast('Employee created', 'success'); closeModal(); renderRoute(); } else toast(res.error || 'Could not create', 'error');
     } else {
       const ok = await rpc('admin_update_employee', {
         p_admin_passcode: session.passcode, p_employee_id: emp.id, p_name: fd.get('name'), p_phone: fd.get('phone') || '',
         p_job_role: fd.get('job_role') || '', p_monthly_target: Number(fd.get('monthly_target') || 0),
-        p_monthly_salary: Number(fd.get('monthly_salary') || 0), p_active: fd.get('active') === 'true'
+        p_monthly_salary: Number(fd.get('monthly_salary') || 0), p_active: fd.get('active') === 'true',
+        p_team_group: fd.get('team_group') || ''
       });
       if (ok) { toast('Employee updated', 'success'); closeModal(); renderRoute(); }
     }
@@ -1255,6 +1323,149 @@ function openResetPasswordModal(empId){
 }
 
 // ============================================================
+// Layouts (price/sqft tiers by position)
+// ============================================================
+// Price is driven by where a plot sits, not its size. "lowest"/"highest" are always present
+// on a layout (the baseline and premium rate); the rest are optional position-specific rates.
+const POSITIONS = [
+  { key: 'lowest', label: 'Lowest (baseline)' },
+  { key: 'highest', label: 'Highest (premium)' },
+  { key: 'corner', label: 'Corner' },
+  { key: 'front', label: 'Front' },
+  { key: 'road_facing', label: 'Road-facing' },
+  { key: 'back', label: 'Back' },
+  { key: 'no_road', label: 'No road connection' },
+];
+const REQUIRED_POSITIONS = ['lowest', 'highest'];
+const PREMIUM_POSITIONS = ['corner', 'front', 'road_facing'];
+function positionLabel(key){ return (POSITIONS.find(p => p.key === key) || {}).label || key; }
+
+// Rate for a plot = the max among its checked positions' tiers (a corner+road-facing plot
+// gets the better of the two rates, not both stacked). A checked position with no tier of
+// its own defined on this layout falls back to the layout's highest (premium positions) or
+// lowest (discount positions) rate.
+function resolveRatePerSqft(layout, checkedPositions){
+  const tierMap = {};
+  (layout.tiers || []).forEach(t => { tierMap[t.position] = Number(t.price_per_sqft) || 0; });
+  const lowest = tierMap.lowest || 0;
+  const highest = tierMap.highest != null ? tierMap.highest : lowest;
+  if (!checkedPositions.length) return lowest;
+  const rates = checkedPositions.map(pos => tierMap[pos] != null ? tierMap[pos] : (PREMIUM_POSITIONS.includes(pos) ? highest : lowest));
+  return Math.max(...rates);
+}
+// price/sqft * sqft, rounded, then marked up ×1.1 (also rounded).
+function computePlotPrice(layout, sqft, checkedPositions){
+  const raw = resolveRatePerSqft(layout, checkedPositions) * (Number(sqft) || 0);
+  return Math.round(Math.round(raw) * 1.1);
+}
+
+let layoutsData = { layouts: [] };
+
+async function renderLayouts(){
+  const layouts = await fetchLayouts();
+  layoutsData.layouts = layouts;
+  return `
+  <div class="section-head"><h2>Layouts</h2><button class="btn btn-primary" id="addLayoutBtn">${icon('plus')} Add Layout</button></div>
+  <div class="card table-card">
+    <div class="table-wrap"><table>
+      <thead><tr><th>Layout</th><th>Price/sqft by position</th><th>Plots</th><th></th></tr></thead>
+      <tbody>${layouts.map(l => `
+        <tr>
+          <td>${escapeHtml(l.name)}</td>
+          <td>${(l.tiers || []).map(t => `<span style="display:inline-block;background:var(--surface-sunken);color:var(--ink-secondary);border-radius:100px;padding:3px 10px;font-size:11.5px;font-weight:700;margin:0 4px 4px 0">${positionLabel(t.position)}: ${money(t.price_per_sqft)}</span>`).join('') || '—'}</td>
+          <td class="num">${l.num_plots}</td>
+          <td style="display:flex;gap:6px;justify-content:flex-end">
+            <button class="btn btn-sm btn-secondary" data-edit-layout="${l.id}" title="Edit">${icon('edit')}</button>
+            <button class="btn btn-sm btn-danger" data-del-layout="${l.id}" title="Delete">${icon('trash')}</button>
+          </td>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="4">No layouts yet.</td></tr>'}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function bindLayouts(){
+  document.getElementById('addLayoutBtn').onclick = () => openLayoutModal(null);
+  document.querySelectorAll('[data-edit-layout]').forEach(b => b.onclick = () => openLayoutModal(layoutsData.layouts.find(l => l.id === b.dataset.editLayout)));
+  document.querySelectorAll('[data-del-layout]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this layout? Plots using it will become standalone.')) return;
+    const ok = await rpc('admin_delete_layout', { p_admin_passcode: session.passcode, p_layout_id: b.dataset.delLayout });
+    if (ok) { toast('Layout deleted', 'success'); renderRoute(); }
+  });
+}
+
+function openLayoutModal(layout){
+  const isNew = !layout;
+  let tiers = isNew
+    ? [{ position: 'lowest', price_per_sqft: 0 }, { position: 'highest', price_per_sqft: 0 }]
+    : REQUIRED_POSITIONS.map(k => ({ position: k, price_per_sqft: (layout.tiers.find(t => t.position === k) || {}).price_per_sqft || 0 }))
+        .concat(layout.tiers.filter(t => !REQUIRED_POSITIONS.includes(t.position)).map(t => ({ ...t })));
+
+  openModal(`
+    <div class="modal-panel wide">
+      <div class="modal-head"><h3>${isNew ? 'Add Layout' : 'Edit Layout'}</h3><button class="modal-close">${icon('close')}</button></div>
+      <form id="layoutForm">
+        <div class="form-row">
+          <label class="field"><span class="lbl">Layout / venture name</span><input type="text" name="name" required value="${isNew ? '' : escapeHtml(layout.name)}"></label>
+          <label class="field"><span class="lbl">Number of plots</span><input type="number" name="num_plots" min="0" value="${isNew ? 0 : layout.num_plots}"></label>
+        </div>
+        <p class="hint" style="margin-top:-4px;margin-bottom:12px">Price per sq/ft by position. Lowest and Highest are required — add more only for positions this layout prices differently.</p>
+        <div id="tierRows"></div>
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:16px">
+          <label class="field" style="flex:1;margin-bottom:0"><span class="lbl">Add a position-specific rate</span><select id="newTierPosition"></select></label>
+          <button class="btn btn-secondary" type="button" id="addTierBtn">${icon('plus')} Add</button>
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">${isNew ? 'Add layout' : 'Save changes'}</button>
+      </form>
+    </div>`);
+
+  function renderTierRows(){
+    const rows = document.getElementById('tierRows');
+    rows.innerHTML = tiers.map((t, i) => `
+      <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
+        <label class="field" style="flex:1;margin-bottom:0"><span class="lbl">${positionLabel(t.position)}${REQUIRED_POSITIONS.includes(t.position) ? ' (required)' : ''} — ₹/sqft</span>
+          <input type="number" min="0" step="0.01" data-tier-price="${i}" value="${t.price_per_sqft}">
+        </label>
+        ${REQUIRED_POSITIONS.includes(t.position) ? '' : `<button class="btn btn-sm btn-danger" type="button" data-remove-tier="${i}" title="Remove">${icon('trash')}</button>`}
+      </div>`).join('');
+    rows.querySelectorAll('[data-tier-price]').forEach(inp => inp.oninput = () => {
+      tiers[Number(inp.dataset.tierPrice)].price_per_sqft = Number(inp.value || 0);
+    });
+    rows.querySelectorAll('[data-remove-tier]').forEach(b => b.onclick = () => {
+      tiers.splice(Number(b.dataset.removeTier), 1);
+      renderTierRows(); renderPositionOptions();
+    });
+  }
+  function renderPositionOptions(){
+    const used = tiers.map(t => t.position);
+    const sel = document.getElementById('newTierPosition');
+    const remaining = POSITIONS.filter(p => !REQUIRED_POSITIONS.includes(p.key) && !used.includes(p.key));
+    sel.innerHTML = remaining.length ? remaining.map(p => `<option value="${p.key}">${p.label}</option>`).join('') : '<option value="">— all positions added —</option>';
+    document.getElementById('addTierBtn').disabled = !remaining.length;
+  }
+  renderTierRows();
+  renderPositionOptions();
+  document.getElementById('addTierBtn').onclick = () => {
+    const pos = document.getElementById('newTierPosition').value;
+    if (!pos) return;
+    tiers.push({ position: pos, price_per_sqft: 0 });
+    renderTierRows(); renderPositionOptions();
+  };
+
+  document.getElementById('layoutForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const common = { p_name: fd.get('name'), p_num_plots: Number(fd.get('num_plots') || 0), p_tiers: tiers };
+    if (isNew){
+      const res = await rpc('admin_add_layout', { p_admin_passcode: session.passcode, ...common });
+      if (res.success) { toast('Layout added', 'success'); closeModal(); renderRoute(); } else toast(res.error || 'Could not add', 'error');
+    } else {
+      const ok = await rpc('admin_update_layout', { p_admin_passcode: session.passcode, p_layout_id: layout.id, ...common });
+      if (ok) { toast('Layout updated', 'success'); closeModal(); renderRoute(); }
+    }
+  };
+}
+
+// ============================================================
 // Plots (land inventory)
 // ============================================================
 const PLOT_TYPES = ['residential', 'commercial', 'agricultural'];
@@ -1268,11 +1479,21 @@ function plotLabel(p){
   return bits.length ? bits.join(' — ') + (p.title ? ' (' + p.title + ')' : '') : p.title;
 }
 function plotExtent(p){ return p.extent_value ? `${p.extent_value} ${p.extent_unit}` : '—'; }
-function plotFacing(p){ return (p.facing ? p.facing : '—') + (p.is_corner ? ' · Corner' : ''); }
+function plotPositionTags(p){
+  const tags = [];
+  if (p.is_corner) tags.push('Corner');
+  if (p.is_front) tags.push('Front');
+  if (p.is_road_facing) tags.push('Road-facing');
+  if (p.is_back) tags.push('Back');
+  if (p.has_no_road) tags.push('No road connection');
+  return tags;
+}
+function plotFacing(p){ return (p.facing ? p.facing : '—') + plotPositionTags(p).map(t => ' · ' + t).join(''); }
 
 async function renderPlots(){
-  const plots = await fetchPlots();
+  const [plots, layouts] = await Promise.all([fetchPlots(), isEmployee() ? Promise.resolve([]) : fetchLayouts()]);
   plotsData.plots = plots;
+  plotsData.layouts = layouts;
   if (isEmployee()){
     return `
     <div class="section-head"><h2>Plots</h2></div>
@@ -1327,7 +1548,12 @@ function openPlotModal(prop){
       <form id="propForm">
         <label class="field"><span class="lbl">Title</span><input type="text" name="title" required placeholder="e.g. Corner plot near main road" value="${isNew ? '' : escapeHtml(prop.title)}"></label>
         <div class="form-row">
-          <label class="field"><span class="lbl">Layout / venture name (optional)</span><input type="text" name="layout_name" placeholder="Leave blank for a standalone parcel" value="${isNew ? '' : escapeHtml(prop.layout_name || '')}"></label>
+          <label class="field"><span class="lbl">Layout / venture (optional)</span>
+            <select name="layout_id">
+              <option value="">— Standalone (no layout) —</option>
+              ${plotsData.layouts.map(l => `<option value="${l.id}" ${!isNew && prop.layout_id === l.id ? 'selected' : ''}>${escapeHtml(l.name)}</option>`).join('')}
+            </select>
+          </label>
           <label class="field"><span class="lbl">Plot number (optional)</span><input type="text" name="plot_number" value="${isNew ? '' : escapeHtml(prop.plot_number || '')}"></label>
         </div>
         <div class="form-row">
@@ -1337,7 +1563,7 @@ function openPlotModal(prop){
           <label class="field"><span class="lbl">Location</span><input type="text" name="location" value="${isNew ? '' : escapeHtml(prop.location || '')}"></label>
         </div>
         <div class="form-row">
-          <label class="field"><span class="lbl">Extent</span><input type="number" name="extent_value" min="0" step="0.01" value="${isNew ? '' : prop.extent_value}"></label>
+          <label class="field"><span class="lbl">Extent (sq/ft to auto-price)</span><input type="number" name="extent_value" min="0" step="0.01" value="${isNew ? '' : prop.extent_value}"></label>
           <label class="field"><span class="lbl">Unit</span>
             <select name="extent_unit">${['sqft', 'cents', 'acres'].map(u => `<option value="${u}" ${!isNew && prop.extent_unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select>
           </label>
@@ -1347,24 +1573,60 @@ function openPlotModal(prop){
           <label class="field"><span class="lbl">Facing</span>
             <select name="facing">${FACINGS.map(f => `<option value="${f}" ${!isNew && prop.facing === f ? 'selected' : ''}>${f || '— Not specified —'}</option>`).join('')}</select>
           </label>
-          <label class="field"><span class="lbl">Price (₹)</span><input type="number" name="price" min="0" value="${isNew ? 0 : prop.price}"></label>
+          <label class="field"><span class="lbl">Price (₹)</span><input type="number" name="price" min="0" value="${isNew ? 0 : prop.price}">
+            <span class="hint" id="priceHint" style="display:block"></span>
+          </label>
         </div>
-        <label class="field" style="display:flex;align-items:center;gap:8px">
-          <input type="checkbox" name="is_corner" style="width:auto;min-height:0" ${!isNew && prop.is_corner ? 'checked' : ''}>
-          <span class="lbl" style="margin:0">Corner plot</span>
-        </label>
+        <p class="hint" style="margin:-6px 0 6px">Position — check any that apply. If it's a corner, front, or road-facing plot, use those; back plots or plots with no road connection cost less.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:14px">
+          ${[['is_corner','Corner'],['is_front','Front'],['is_road_facing','Road-facing'],['is_back','Back'],['has_no_road','No road connection']].map(([name,label]) => `
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600">
+            <input type="checkbox" name="${name}" style="width:auto;min-height:0" ${!isNew && prop[name] ? 'checked' : ''}>
+            ${label}
+          </label>`).join('')}
+        </div>
         ${!isNew ? `<label class="field"><span class="lbl">Status</span><select name="status">${PLOT_STATUSES.map(s => `<option value="${s}" ${prop.status === s ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}</select></label>` : ''}
         <button class="btn btn-primary btn-block" type="submit">${isNew ? 'Add plot' : 'Save changes'}</button>
       </form>
     </div>`);
-  document.getElementById('propForm').onsubmit = async (e) => {
+
+  const POSITION_FIELD_MAP = { is_corner: 'corner', is_front: 'front', is_road_facing: 'road_facing', is_back: 'back', has_no_road: 'no_road' };
+  const form = document.getElementById('propForm');
+  function recomputePrice(){
+    const priceInput = form.querySelector('[name="price"]');
+    const hint = document.getElementById('priceHint');
+    const layoutId = form.querySelector('[name="layout_id"]').value;
+    const unit = form.querySelector('[name="extent_unit"]').value;
+    if (!layoutId){ priceInput.readOnly = false; hint.textContent = ''; return; }
+    const layout = plotsData.layouts.find(l => l.id === layoutId);
+    if (!layout || unit !== 'sqft'){
+      priceInput.readOnly = false;
+      hint.textContent = unit !== 'sqft' ? 'Auto price needs the extent in sq/ft.' : '';
+      return;
+    }
+    const sqft = Number(form.querySelector('[name="extent_value"]').value || 0);
+    const checked = Object.keys(POSITION_FIELD_MAP).filter(name => form.querySelector(`[name="${name}"]`).checked).map(name => POSITION_FIELD_MAP[name]);
+    priceInput.value = computePlotPrice(layout, sqft, checked);
+    priceInput.readOnly = true;
+    hint.textContent = `Auto-calculated from ${layout.name}'s price/sq-ft (rounded, ×1.1 markup).`;
+  }
+  ['layout_id', 'extent_value', 'extent_unit', ...Object.keys(POSITION_FIELD_MAP)].forEach(name => {
+    form.querySelector(`[name="${name}"]`).addEventListener('input', recomputePrice);
+  });
+  recomputePrice();
+
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    const layoutId = fd.get('layout_id') || null;
+    const layoutName = layoutId ? (plotsData.layouts.find(l => l.id === layoutId) || {}).name || '' : '';
     const common = {
-      p_title: fd.get('title'), p_layout_name: fd.get('layout_name') || '', p_plot_number: fd.get('plot_number') || '',
+      p_title: fd.get('title'), p_layout_name: layoutName, p_plot_number: fd.get('plot_number') || '',
       p_type: fd.get('type'), p_location: fd.get('location') || '', p_extent_value: Number(fd.get('extent_value') || 0),
       p_extent_unit: fd.get('extent_unit'), p_facing: fd.get('facing') || '', p_is_corner: fd.get('is_corner') === 'on',
-      p_road_width_ft: fd.get('road_width_ft') ? Number(fd.get('road_width_ft')) : null, p_price: Number(fd.get('price') || 0)
+      p_road_width_ft: fd.get('road_width_ft') ? Number(fd.get('road_width_ft')) : null, p_price: Number(fd.get('price') || 0),
+      p_layout_id: layoutId, p_is_front: fd.get('is_front') === 'on', p_is_road_facing: fd.get('is_road_facing') === 'on',
+      p_is_back: fd.get('is_back') === 'on', p_has_no_road: fd.get('has_no_road') === 'on'
     };
     if (isNew){
       const res = await rpc('admin_add_plot', { p_admin_passcode: session.passcode, ...common });
@@ -1385,7 +1647,9 @@ const ROUTES = {
   followups: { title: () => 'Follow-ups', sub: () => 'Stay on top of your leads', render: renderFollowUps, bind: bindFollowUps },
   activity: { title: () => isAdmin() ? 'Team Activity' : 'Daily Activity', sub: () => 'Calls, visits & meetings', render: renderActivity, bind: bindActivity },
   team: { title: () => isAdmin() ? 'Employees' : 'Team', sub: () => isAdmin() ? 'Manage accounts & targets' : 'Leaderboard', render: renderTeam, bind: bindTeam },
+  performance: { title: () => 'Team Performance', sub: () => 'Group & individual results, this month', render: renderPerformance },
   plots: { title: () => 'Plots', sub: () => 'Land inventory', render: renderPlots, bind: bindPlots },
+  layouts: { title: () => 'Layouts', sub: () => 'Ventures & price/sqft by position', render: renderLayouts, bind: bindLayouts },
   dayoffs: { title: () => isAdmin() ? 'Day Offs' : 'Day Off', sub: () => 'Requests & team calendar', render: renderDayOffs, bind: bindDayOffs },
 };
 
